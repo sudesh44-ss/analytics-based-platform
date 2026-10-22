@@ -40,52 +40,82 @@ export interface AuditConfig {
 
 export interface Project {
   id: string;
-  userId: string;
+  userId?: string;
+  user_id?: string;
   name: string;
   domain: string;
-  normalizedUrl: string;
-  isVerified: boolean;
-  verificationToken: string;
-  isArchived: boolean;
-  createdAt: string;
-  updatedAt: string;
+  normalizedUrl?: string;
+  normalized_url?: string;
+  isVerified?: boolean;
+  is_verified?: boolean;
+  verificationToken?: string;
+  verification_token?: string;
+  isArchived?: boolean;
+  is_archived?: boolean;
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
 }
 
 export interface AuditJob {
   id: string;
-  projectId: string;
-  userId: string;
+  projectId?: string;
+  project_id?: string;
+  userId?: string;
+  user_id?: string;
   status: AuditJobStatus;
   config: AuditConfig;
-  pagesCrawled: number;
-  maxPages: number;
+  pagesCrawled?: number;
+  pages_crawled?: number;
+  maxPages?: number;
+  max_pages?: number;
   overallScore?: number | null;
+  overall_score?: number | null;
   failureReason?: string | null;
+  failure_reason?: string | null;
   startedAt?: string | null;
+  started_at?: string | null;
   completedAt?: string | null;
-  heartbeatAt: string;
-  retryCount: number;
-  createdAt: string;
+  completed_at?: string | null;
+  heartbeatAt?: string;
+  heartbeat_at?: string;
+  retryCount?: number;
+  retry_count?: number;
+  createdAt?: string;
+  created_at?: string;
 }
 
 export interface CrawledPage {
   id: string;
-  auditJobId: string;
-  projectId: string;
+  auditJobId?: string;
+  audit_job_id?: string;
+  projectId?: string;
+  project_id?: string;
   url: string;
-  normalizedUrl: string;
-  statusCode: number;
-  responseTimeMs: number;
+  normalizedUrl?: string;
+  normalized_url?: string;
+  statusCode?: number;
+  status_code?: number;
+  responseTimeMs?: number;
+  response_time_ms?: number;
   contentType?: string | null;
+  content_type?: string | null;
   contentLength?: number | null;
+  content_length?: number | null;
   title?: string | null;
   metaDescription?: string | null;
+  meta_description?: string | null;
   h1?: string | null;
   canonicalUrl?: string | null;
+  canonical_url?: string | null;
   robotsMeta?: string | null;
-  isIndexable: boolean;
-  depth: number;
-  createdAt: string;
+  robots_meta?: string | null;
+  isIndexable?: boolean;
+  is_indexable?: boolean;
+  depth?: number;
+  createdAt?: string;
+  created_at?: string;
 }
 
 export interface ExtractedLink {

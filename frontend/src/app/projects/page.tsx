@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Globe,
   Plus,
@@ -11,65 +12,49 @@ import {
   AlertCircle,
   ExternalLink,
   Shield,
+  RefreshCw,
 } from 'lucide-react';
 import { Navbar } from '../../components/common/Navbar';
 import { Footer } from '../../components/common/Footer';
 import { DashboardSidebar } from '../../components/dashboard/DashboardSidebar';
+import { getProjects, createProject, triggerAudit } from '../../lib/api';
+import { Project } from '@sitescope/shared';
 import styles from './page.module.css';
 
-interface ProjectItem {
-  id: string;
-  name: string;
-  domain: string;
-  normalizedUrl: string;
-  isVerified: boolean;
-  score: number;
-  lastAudit: string;
-  status: 'IDLE' | 'CRAWLING' | 'COMPLETED';
-}
-
-const INITIAL_PROJECTS: ProjectItem[] = [
-  {
-    id: 'proj_1',
-    name: 'Main Platform',
-    domain: 'sitescope.io',
-    normalizedUrl: 'https://sitescope.io',
-    isVerified: true,
-    score: 84,
-    lastAudit: '2 hours ago',
-    status: 'COMPLETED',
-  },
-  {
-    id: 'proj_2',
-    name: 'E-commerce Demo Store',
-    domain: 'example-store.com',
-    normalizedUrl: 'https://example-store.com',
-    isVerified: true,
-    score: 76,
-    lastAudit: '1 day ago',
-    status: 'COMPLETED',
-  },
-  {
-    id: 'proj_3',
-    name: 'Engineering Tech Blog',
-    domain: 'tech-blog-demo.dev',
-    normalizedUrl: 'https://tech-blog-demo.dev',
-    isVerified: false,
-    score: 91,
-    lastAudit: '2 days ago',
-    status: 'COMPLETED',
-  },
-];
-
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<ProjectItem[]>(INITIAL_PROJECTS);
+  const router = useRouter();
+  const [projects, setProjects] = useState<Project[]>([]);
   const [projectName, setProjectName] = useState('');
   const [domainInput, setDomainInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [runningAuditIds, setRunningAuditIds] = useState<Set<string>>(new Set());
+  const [feedback, setFeedback] = useState<{
+    type: 'error' | 'success';
+    message: string;
+  } | null>(null);
 
-  // Client-side pre-flight validation
-  const handleAddProject = (e: React.FormEvent) => {
+  // Load projects from Fastify API
+  const loadProjects = async () => {
+    setIsLoading(true);
+    const res = await getProjects();
+    if (res.success && res.data?.items) {
+      setProjects(res.data.items);
+    } else if (res.error) {
+      setFeedback({
+        type: 'error',
+        message: res.error.message || 'Failed to load projects from server.',
+      });
+    }
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  // Submit new project to backend API with SSRF check
+  const handleAddProject = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
@@ -79,7 +64,7 @@ export default function ProjectsPage() {
       return;
     }
 
-    // Client-side quick SSRF check
+    // Client-side quick pre-flight check
     if (
       raw.includes('localhost') ||
       raw.includes('127.0.0.1') ||
@@ -96,48 +81,61 @@ export default function ProjectsPage() {
 
     setIsSubmitting(true);
 
-    let normalized = raw;
-    if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
-      normalized = `https://${normalized}`;
-    }
+    const res = await createProject({
+      name: projectName || raw,
+      domain: raw,
+    });
 
-    try {
-      const parsed = new URL(normalized);
-      const newProj: ProjectItem = {
-        id: `proj_${Date.now()}`,
-        name: projectName || parsed.hostname,
-        domain: parsed.hostname,
-        normalizedUrl: normalized,
-        isVerified: false,
-        score: 100,
-        lastAudit: 'Never',
-        status: 'IDLE',
-      };
-
-      setProjects([newProj, ...projects]);
+    if (res.success && res.data) {
+      setProjects([res.data, ...projects]);
       setProjectName('');
       setDomainInput('');
-      setFeedback({ type: 'success', message: `Website "${parsed.hostname}" added successfully.` });
-    } catch {
-      setFeedback({ type: 'error', message: 'Invalid URL format. Please enter e.g. example.com' });
-    } finally {
-      setIsSubmitting(false);
+      setFeedback({
+        type: 'success',
+        message: `Website "${res.data.domain}" registered successfully.`,
+      });
+    } else {
+      setFeedback({
+        type: 'error',
+        message: res.error?.message || 'Failed to register website destination.',
+      });
     }
+
+    setIsSubmitting(false);
   };
 
-  const handleRunAudit = (id: string) => {
-    setProjects((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: 'CRAWLING' as const } : p))
-    );
+  // Trigger real audit execution through BullMQ worker
+  const handleRunAudit = async (projectId: string) => {
+    setRunningAuditIds((prev) => new Set(prev).add(projectId));
+    setFeedback(null);
 
-    // Simulate crawl progression
-    setTimeout(() => {
-      setProjects((prev) =>
-        prev.map((p) =>
-          p.id === id ? { ...p, status: 'COMPLETED' as const, lastAudit: 'Just now', score: 86 } : p
-        )
-      );
-    }, 4000);
+    const res = await triggerAudit({
+      projectId,
+      maxPages: 50,
+      crawlDepth: 3,
+    });
+
+    if (res.success && res.data) {
+      const auditJob = res.data;
+      setFeedback({
+        type: 'success',
+        message: `Audit job queued successfully. Navigating to live report...`,
+      });
+      // Redirect to the live audit report
+      setTimeout(() => {
+        router.push(`/audits/${auditJob.id}`);
+      }, 1000);
+    } else {
+      setFeedback({
+        type: 'error',
+        message: res.error?.message || 'Failed to queue audit job. Daily quota may be exceeded.',
+      });
+      setRunningAuditIds((prev) => {
+        const next = new Set(prev);
+        next.delete(projectId);
+        return next;
+      });
+    }
   };
 
   return (
@@ -153,6 +151,14 @@ export default function ProjectsPage() {
                 Manage monitored domains, configure audit frequency, and view health benchmarks.
               </p>
             </div>
+            <button
+              onClick={loadProjects}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            >
+              <RefreshCw size={14} />
+              <span>Refresh</span>
+            </button>
           </div>
 
           {/* Add New Website Card */}
@@ -215,78 +221,98 @@ export default function ProjectsPage() {
             )}
           </div>
 
+          {/* Loading Indicator */}
+          {isLoading && (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+              <RefreshCw size={18} className="spin-animation" style={{ marginRight: '8px' }} />
+              <span>Fetching registered websites...</span>
+            </div>
+          )}
+
+          {/* Empty State */}
+          {!isLoading && projects.length === 0 && (
+            <div className="card" style={{ padding: '40px', textAlign: 'center' }}>
+              <Globe size={32} color="var(--text-muted)" style={{ marginBottom: '12px' }} />
+              <h3 style={{ fontSize: '16px', fontWeight: 600 }}>No Websites Registered</h3>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                Use the form above to add a website and launch your first comprehensive audit.
+              </p>
+            </div>
+          )}
+
           {/* Project List */}
-          <div className={styles.projectGrid}>
-            {projects.map((project) => (
-              <div key={project.id} className={styles.projectCard}>
-                <div className={styles.projectHeader}>
-                  <div>
-                    <div className={styles.domainName}>{project.domain}</div>
-                    <div className={styles.projectUrl}>{project.name}</div>
-                  </div>
-                  {project.isVerified ? (
-                    <span className="badge badge-success">
-                      <Shield size={12} /> Verified
-                    </span>
-                  ) : (
-                    <span className="badge badge-info">Unverified</span>
-                  )}
-                </div>
+          {!isLoading && projects.length > 0 && (
+            <div className={styles.projectGrid}>
+              {projects.map((project) => {
+                const isRunning = runningAuditIds.has(project.id);
 
-                <div className={styles.scoreRow}>
-                  <div>
-                    <div className={styles.scoreLabel}>Health Score</div>
-                    <div
-                      className={styles.scoreValue}
-                      style={{
-                        color:
-                          project.score >= 80
-                            ? 'var(--success)'
-                            : project.score >= 50
-                            ? 'var(--medium)'
-                            : 'var(--critical)',
-                      }}
-                    >
-                      {project.score}/100
+                return (
+                  <div key={project.id} className={styles.projectCard}>
+                    <div className={styles.projectHeader}>
+                      <div>
+                        <div className={styles.domainName}>{project.domain}</div>
+                        <div className={styles.projectUrl}>{project.name}</div>
+                      </div>
+                      {project.isVerified ? (
+                        <span className="badge badge-success">
+                          <Shield size={12} /> Verified
+                        </span>
+                      ) : (
+                        <span className="badge badge-info">Unverified</span>
+                      )}
+                    </div>
+
+                    <div className={styles.scoreRow}>
+                      <div>
+                        <div className={styles.scoreLabel}>Target Origin</div>
+                        <div
+                          style={{
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            color: 'var(--text-primary)',
+                            marginTop: '2px',
+                          }}
+                        >
+                          {project.normalized_url || project.normalizedUrl || project.domain}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div className={styles.scoreLabel}>Registered</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>
+                          {project.created_at || project.createdAt
+                            ? new Date(project.created_at || project.createdAt!).toLocaleDateString()
+                            : 'Recently'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className={styles.cardFooter}>
+                      <div className={styles.auditMeta}>
+                        {isRunning ? (
+                          <span style={{ color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Clock size={14} className="spin-animation" /> Queueing crawl...
+                          </span>
+                        ) : (
+                          <span>Free Quota: 3 audits/day</span>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={() => handleRunAudit(project.id)}
+                          className="btn btn-secondary btn-sm"
+                          disabled={isRunning}
+                        >
+                          <Play size={14} />
+                          <span>{isRunning ? 'Queueing...' : 'Run Audit'}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div className={styles.scoreLabel}>Last Audit</div>
-                    <div style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>
-                      {project.lastAudit}
-                    </div>
-                  </div>
-                </div>
-
-                <div className={styles.cardFooter}>
-                  <div className={styles.auditMeta}>
-                    {project.status === 'CRAWLING' ? (
-                      <span style={{ color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Clock size={14} className="animate-spin" /> Crawling pages...
-                      </span>
-                    ) : (
-                      <span>Free Quota: 3 audits/day</span>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      onClick={() => handleRunAudit(project.id)}
-                      className="btn btn-secondary btn-sm"
-                      disabled={project.status === 'CRAWLING'}
-                    >
-                      <Play size={14} />
-                      <span>{project.status === 'CRAWLING' ? 'Running...' : 'Run Audit'}</span>
-                    </button>
-                    <Link href={`/audits/${project.id}`} className="btn btn-primary btn-sm">
-                      <span>Report</span>
-                      <ExternalLink size={14} />
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </main>
       </div>
       <Footer />
