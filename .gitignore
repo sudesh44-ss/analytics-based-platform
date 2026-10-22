@@ -13,16 +13,10 @@ dist/
 # Testing & Coverage
 coverage/
 
-# Environment secrets
+# Environment files and secrets
 .env
 .env.*
 !.env.example
-
-# Local environment files
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
 # Debug logs
 *.log
