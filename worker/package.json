@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test tests/crawler.test.ts tests/notifications.test.ts tests/pagespeed.test.ts tests/scoring.test.ts tests/seo-rules.test.ts tests/ssrf.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
