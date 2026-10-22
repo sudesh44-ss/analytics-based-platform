@@ -7,6 +7,8 @@ import { createClient } from '@supabase/supabase-js';
 import { evaluateSeoRules } from './processors/seo-rules.js';
 import { computeAuditScores } from './processors/scoring.js';
 import { crawlWebsite } from './crawlers/cheerio.js';
+import { fetchPageSpeedMetrics } from './services/pagespeed.js';
+import { sendAuditCompletedEmail } from './services/notifications.js';
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 const connection = new (IORedis as any)(redisUrl, {
@@ -86,7 +88,29 @@ export const auditWorker = new Worker(
         .update({ status: 'ANALYZING', pages_crawled: crawledPages.length })
         .eq('id', jobId);
 
-      // 5. Run Rule Engine & Scoring
+      // 5. Fetch PageSpeed Insights & Core Web Vitals
+      const perfMetrics = await fetchPageSpeedMetrics(targetUrl, 'MOBILE');
+      await supabase.from('performance_metrics').insert({
+        audit_job_id: jobId,
+        project_id: projectId,
+        tested_url: targetUrl,
+        device_mode: 'MOBILE',
+        source: perfMetrics.source,
+        performance_score: perfMetrics.performanceScore,
+        accessibility_score: perfMetrics.accessibilityScore,
+        best_practices_score: perfMetrics.bestPracticesScore,
+        seo_score: perfMetrics.seoScore,
+        fcp_ms: perfMetrics.fcpMs,
+        lcp_ms: perfMetrics.lcpMs,
+        cls: perfMetrics.cls,
+        inp_ms: perfMetrics.inpMs,
+        tbt_ms: perfMetrics.tbtMs,
+        speed_index_ms: perfMetrics.speedIndexMs,
+        has_field_data: perfMetrics.hasFieldData,
+        opportunities: perfMetrics.opportunities || null,
+      });
+
+      // 6. Run Rule Engine & Composite Scoring
       const findings = evaluateSeoRules(crawledPages);
       const findingInputs = findings.map((f) => ({
         ruleId: f.ruleId,
@@ -95,9 +119,9 @@ export const auditWorker = new Worker(
         occurrencesCount: f.affectedUrls.length,
       }));
 
-      const scores = computeAuditScores(findingInputs, 85); // 85 PSI benchmark
+      const scores = computeAuditScores(findingInputs, perfMetrics.performanceScore);
 
-      // 6. Persist Findings into PostgreSQL
+      // 7. Persist Findings into PostgreSQL
       for (const finding of findings) {
         await supabase
           .from('issues')
@@ -120,7 +144,7 @@ export const auditWorker = new Worker(
           );
       }
 
-      // 7. Persist Audit Summary
+      // 8. Persist Audit Summary
       const criticalCount = findings.filter((f) => f.severity === 'CRITICAL').length;
       const highCount = findings.filter((f) => f.severity === 'HIGH').length;
       const mediumCount = findings.filter((f) => f.severity === 'MEDIUM').length;
@@ -144,7 +168,7 @@ export const auditWorker = new Worker(
         info_issues_count: infoCount,
       });
 
-      // 8. Mark Job COMPLETED
+      // 9. Mark Job COMPLETED
       await supabase
         .from('audit_jobs')
         .update({
@@ -153,6 +177,23 @@ export const auditWorker = new Worker(
           completed_at: new Date().toISOString(),
         })
         .eq('id', jobId);
+
+      // 10. Dispatch Transactional Completion Email via Resend
+      if (job.data.userEmail) {
+        try {
+          const domain = new URL(targetUrl).hostname;
+          await sendAuditCompletedEmail({
+            to: job.data.userEmail,
+            domain,
+            overallScore: scores.overallScore,
+            totalPages: crawledPages.length,
+            issuesCount: findings.length,
+            auditId: jobId,
+          });
+        } catch {
+          // Non-blocking notification dispatch
+        }
+      }
 
       console.log(`[Worker] Successfully completed audit ${jobId} with score ${scores.overallScore}`);
     } catch (err: any) {

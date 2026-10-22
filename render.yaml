@@ -1,0 +1,76 @@
+services:
+  # -------------------------------------------------------------
+  # SiteScope Fastify REST API Service
+  # -------------------------------------------------------------
+  - type: web
+    name: sitescope-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.backend
+    plan: starter
+    region: oregon
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: sitescope-redis
+          property: connectionString
+      - key: ENCRYPTION_MASTER_KEY
+        generateValue: true
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+
+  # -------------------------------------------------------------
+  # SiteScope Crawlee & BullMQ Background Worker
+  # -------------------------------------------------------------
+  - type: worker
+    name: sitescope-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile.worker
+    plan: starter
+    region: oregon
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: sitescope-redis
+          property: connectionString
+      - key: GOOGLE_PAGESPEED_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: SiteScope <notifications@sitescope.io>
+
+  # -------------------------------------------------------------
+  # Managed Redis for Queueing & Rate Limiting
+  # -------------------------------------------------------------
+  - type: redis
+    name: sitescope-redis
+    plan: starter
+    region: oregon
+    maxmemoryPolicy: noeviction

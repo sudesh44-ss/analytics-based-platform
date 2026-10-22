@@ -1,0 +1,49 @@
+# ==========================================
+# SiteScope Frontend UI — Multi-Stage Dockerfile (Next.js)
+# ==========================================
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy root monorepo manifests
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY frontend/package.json ./frontend/
+
+# Install dependencies across workspaces
+RUN npm ci
+
+# Copy source code
+COPY shared/ ./shared/
+COPY frontend/ ./frontend/
+
+# Build Next.js app with Turbopack
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build -w frontend
+
+# ------------------------------------------
+# Production Runtime Stage
+# ------------------------------------------
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY frontend/package.json ./frontend/
+
+# Install only production dependencies
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/frontend/.next ./frontend/.next
+COPY --from=builder /app/frontend/public ./frontend/public
+
+EXPOSE 3000
+
+CMD ["npm", "run", "start", "-w", "frontend"]

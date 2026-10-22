@@ -2,6 +2,7 @@
   "name": "sitescope-monorepo",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "workspaces": [
     "shared",
     "backend",
@@ -13,7 +14,9 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "lint": "npm run lint --workspaces --if-present",
+    "verify": "node scripts/verify-setup.js",
+    "db:migrate": "node scripts/migrate.js"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

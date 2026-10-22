@@ -1,0 +1,107 @@
+services:
+  # -------------------------------------------------------------
+  # 1. PostgreSQL Database with Migrations Preloaded
+  # -------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: sitescope-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sitescope
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/migrations/00001_initial_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/migrations/00002_row_level_security.sql:/docker-entrypoint-initdb.d/02_rls.sql:ro
+      - ./database/migrations/00003_functions_and_triggers.sql:/docker-entrypoint-initdb.d/03_functions.sql:ro
+      - ./database/seeds/001_plans_seed.sql:/docker-entrypoint-initdb.d/04_seeds.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sitescope"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------
+  # 2. Redis Cache & BullMQ Message Queue
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: sitescope-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------
+  # 3. Fastify REST API Service
+  # -------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: sitescope-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      FRONTEND_ORIGIN: http://localhost:3000
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/sitescope
+    ports:
+      - "4000:4000"
+
+  # -------------------------------------------------------------
+  # 4. Crawlee & BullMQ Background Worker
+  # -------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: sitescope-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/sitescope
+
+  # -------------------------------------------------------------
+  # 5. Next.js SaaS Web Application
+  # -------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: sitescope-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
+  redisdata:

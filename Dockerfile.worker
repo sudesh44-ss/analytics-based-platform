@@ -1,0 +1,45 @@
+# ==========================================
+# SiteScope Background Crawler Worker — Multi-Stage Dockerfile
+# ==========================================
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy root monorepo manifests
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY worker/package.json ./worker/
+
+# Install dependencies across workspaces
+RUN npm ci
+
+# Copy source code
+COPY shared/ ./shared/
+COPY worker/ ./worker/
+
+# Build shared library and worker TypeScript
+RUN npm run build -w shared && npm run build -w worker
+
+# ------------------------------------------
+# Production Runtime Stage
+# ------------------------------------------
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+# Copy root manifests & workspaces
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY worker/package.json ./worker/
+
+# Install only production dependencies
+RUN npm ci --omit=dev
+
+# Copy compiled artifacts from builder
+COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/worker/dist ./worker/dist
+
+CMD ["node", "worker/dist/index.js"]

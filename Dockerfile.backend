@@ -1,0 +1,54 @@
+# ==========================================
+# SiteScope Backend API — Multi-Stage Dockerfile
+# ==========================================
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy root monorepo manifests
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY backend/package.json ./backend/
+
+# Install dependencies across workspaces
+RUN npm ci
+
+# Copy source code
+COPY shared/ ./shared/
+COPY backend/ ./backend/
+
+# Build shared library and backend TypeScript
+RUN npm run build -w shared && npm run build -w backend
+
+# ------------------------------------------
+# Production Runtime Stage
+# ------------------------------------------
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=4000
+
+# Install curl for container health check
+RUN apk add --no-cache curl
+
+# Copy root manifests & workspaces
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY backend/package.json ./backend/
+
+# Install only production dependencies
+RUN npm ci --omit=dev
+
+# Copy compiled artifacts from builder
+COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/backend/dist ./backend/dist
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:4000/api/v1/health || exit 1
+
+CMD ["node", "backend/dist/server.js"]

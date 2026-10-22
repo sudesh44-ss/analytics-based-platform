@@ -85,6 +85,7 @@ export async function auditRoutes(app: FastifyInstance) {
         jobId: auditJob.id,
         projectId: project.id,
         userId,
+        userEmail: (req as any).user?.email,
         targetUrl: project.normalized_url,
         config: auditJob.config,
       });
