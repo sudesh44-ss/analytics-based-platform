@@ -74,3 +74,4 @@ services:
     plan: starter
     region: oregon
     maxmemoryPolicy: noeviction
+    ipAllowList: []
