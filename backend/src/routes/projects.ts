@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { CreateProjectSchema } from '@sitescope/shared';
 import { requireAuth } from '../middleware/auth.js';
-import { getSupabaseAdmin } from '../services/supabase.js';
+import { getSupabaseAdmin, isSupabaseConfigured } from '../services/supabase.js';
 import { validateTargetUrl } from '../services/ssrf.js';
 
 export async function projectRoutes(app: FastifyInstance) {
@@ -10,23 +10,42 @@ export async function projectRoutes(app: FastifyInstance) {
   // List user projects
   app.get('/projects', async (req: FastifyRequest) => {
     const userId = (req as any).user.id;
-    const supabase = getSupabaseAdmin();
 
-    const { data: projects, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('is_archived', false)
-      .order('created_at', { ascending: false });
+    if (!isSupabaseConfigured()) {
+      return {
+        success: true,
+        data: {
+          items: [],
+        },
+      };
+    }
 
-    if (error) throw error;
+    try {
+      const supabase = getSupabaseAdmin();
+      const { data: projects, error } = await supabase
+        .from('projects')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('is_archived', false)
+        .order('created_at', { ascending: false });
 
-    return {
-      success: true,
-      data: {
-        items: projects || [],
-      },
-    };
+      if (error) throw error;
+
+      return {
+        success: true,
+        data: {
+          items: projects || [],
+        },
+      };
+    } catch (err: any) {
+      req.log.warn({ err }, 'Error fetching projects from Supabase');
+      return {
+        success: true,
+        data: {
+          items: [],
+        },
+      };
+    }
   });
 
   // Create new project with SSRF domain check

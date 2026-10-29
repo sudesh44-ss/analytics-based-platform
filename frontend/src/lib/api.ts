@@ -1,4 +1,5 @@
 import { Project, AuditJob, CrawledPage, Issue } from '@sitescope/shared';
+import { getActiveSessionToken, getSupabaseBrowserClient, isSupabaseConfigured } from './supabase';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -59,7 +60,13 @@ export interface TrendItem {
 
 export function getAuthToken(): string {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem('sitescope_auth_token') || 'dev-token';
+  const stored = localStorage.getItem('sitescope_auth_token');
+  if (stored) return stored;
+
+  if (!isSupabaseConfigured() && process.env.NODE_ENV === 'development') {
+    return 'dev-token';
+  }
+  return '';
 }
 
 export function setAuthToken(token: string): void {
@@ -70,9 +77,15 @@ export function setAuthToken(token: string): void {
 
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  isRetry = false
 ): Promise<ApiResponse<T>> {
-  const token = getAuthToken();
+  // 1. Resolve fresh token via Supabase or localStorage
+  let token = await getActiveSessionToken();
+  if (!token) {
+    token = getAuthToken();
+  }
+
   const url = `${API_BASE_URL}${endpoint}`;
 
   const headers: Record<string, string> = {
@@ -91,6 +104,39 @@ async function request<T>(
     });
 
     const data = await res.json();
+
+    // 2. Intercept 401 Session Token Expiration & attempt automatic refresh
+    if (!res.ok && res.status === 401 && !isRetry) {
+      const errCode = data?.error?.code;
+      if (errCode === 'INVALID_TOKEN' || errCode === 'UNAUTHORIZED' || errCode === 'AUTH_VERIFICATION_FAILED') {
+        const client = getSupabaseBrowserClient();
+        if (client) {
+          try {
+            const { data: refreshed, error: refreshErr } = await client.auth.refreshSession();
+            if (!refreshErr && refreshed.session?.access_token) {
+              setAuthToken(refreshed.session.access_token);
+              // Retry the original request once with fresh token
+              return request<T>(endpoint, options, true);
+            } else {
+              // Refresh failed: clear invalid session state to prevent infinite loops
+              if (typeof window !== 'undefined') {
+                localStorage.removeItem('sitescope_auth_token');
+              }
+            }
+          } catch {
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('sitescope_auth_token');
+            }
+          }
+        } else {
+          // If Supabase client is not available or unconfigured, clear invalid token
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('sitescope_auth_token');
+          }
+        }
+      }
+    }
+
     return data as ApiResponse<T>;
   } catch (err: any) {
     return {
@@ -123,6 +169,22 @@ export async function getProject(id: string): Promise<ApiResponse<Project>> {
 }
 
 // 2. Audits API
+export async function getAudits(query?: {
+  projectId?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
+}): Promise<ApiResponse<{ items: (AuditJob & { projects?: { name: string; domain: string } })[]; pagination: Pagination }>> {
+  const params = new URLSearchParams();
+  if (query?.projectId) params.set('projectId', query.projectId);
+  if (query?.status) params.set('status', query.status);
+  if (query?.page) params.set('page', String(query.page));
+  if (query?.limit) params.set('limit', String(query.limit));
+
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return request<{ items: (AuditJob & { projects?: { name: string; domain: string } })[]; pagination: Pagination }>(`/api/v1/audits${qs}`);
+}
+
 export async function triggerAudit(body: {
   projectId: string;
   maxPages?: number;
@@ -154,17 +216,86 @@ export async function getAuditPages(
 
 export async function getAuditIssues(
   auditId: string,
-  query?: { page?: number; limit?: number }
+  query?: { page?: number; limit?: number; category?: string; severity?: string }
 ): Promise<ApiResponse<{ items: Issue[]; pagination: Pagination }>> {
   const params = new URLSearchParams();
   if (query?.page) params.set('page', String(query.page));
   if (query?.limit) params.set('limit', String(query.limit));
+  if (query?.category) params.set('category', query.category);
+  if (query?.severity) params.set('severity', query.severity);
 
   const qs = params.toString() ? `?${params.toString()}` : '';
   return request<{ items: Issue[]; pagination: Pagination }>(`/api/v1/audits/${auditId}/issues${qs}`);
 }
 
-// 3. Dashboard API
+export async function getAuditPerformanceMetrics(
+  auditId: string
+): Promise<ApiResponse<{ items: any[] }>> {
+  return request<{ items: any[] }>(`/api/v1/audits/${auditId}/performance`);
+}
+
+// 3. Billing & Subscription API
+export interface UsageData {
+  periodDate: string;
+  currentAuditsCount: number;
+  maxDailyAudits: number;
+  remainingDailyAudits: number;
+  projectsCount: number;
+  maxProjects: number;
+  maxPagesPerAudit: number;
+  entitlementStatus: string;
+}
+
+export interface InvoiceItem {
+  id: string;
+  invoice_number: string;
+  subtotal_paise: number;
+  tax_paise: number;
+  total_paise: number;
+  currency: string;
+  pdf_url?: string;
+  created_at: string;
+  payments?: {
+    status: string;
+    provider_payment_id?: string;
+  };
+}
+
+export async function getBillingPlans(): Promise<ApiResponse<{ items: any[] }>> {
+  return request<{ items: any[] }>('/api/v1/billing/plans');
+}
+
+export async function getBillingSubscription(): Promise<ApiResponse<any>> {
+  return request<any>('/api/v1/billing/subscription');
+}
+
+export async function getBillingUsage(): Promise<ApiResponse<UsageData>> {
+  return request<UsageData>('/api/v1/billing/usage');
+}
+
+export async function getBillingInvoices(): Promise<ApiResponse<{ items: InvoiceItem[] }>> {
+  return request<{ items: InvoiceItem[] }>('/api/v1/billing/invoices');
+}
+
+export async function createCheckout(planId: 'PRO_MONTHLY' | 'PRO_YEARLY'): Promise<ApiResponse<{ subscriptionId: string; keyId: string }>> {
+  return request<{ subscriptionId: string; keyId: string }>('/api/v1/billing/checkout', {
+    method: 'POST',
+    body: JSON.stringify({ planId }),
+  });
+}
+
+export async function verifyPayment(body: {
+  razorpayPaymentId: string;
+  razorpaySubscriptionId: string;
+  razorpaySignature: string;
+}): Promise<ApiResponse<any>> {
+  return request<any>('/api/v1/billing/verify', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+// 4. Dashboard API
 export async function getDashboardSummary(
   projectId: string
 ): Promise<ApiResponse<DashboardSummaryData>> {

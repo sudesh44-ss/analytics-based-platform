@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
-import { getSupabaseAdmin } from '../services/supabase.js';
+import { getSupabaseAdmin, isSupabaseConfigured } from '../services/supabase.js';
 
 const DashboardSummaryQuery = z.object({
   projectId: z.string().uuid(),

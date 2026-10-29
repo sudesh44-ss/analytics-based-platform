@@ -1,186 +1,491 @@
 'use client';
 
-import { useState } from 'react';
-import Link from 'next/link';
-import { CreditCard, CheckCircle, Shield, AlertTriangle, Download, ArrowUpRight } from 'lucide-react';
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
+import {
+  CreditCard,
+  Shield,
+  Layers,
+  CheckCircle,
+  AlertTriangle,
+  RotateCw,
+  FileText,
+  Download,
+  Calendar,
+  Zap,
+  Globe,
+  Sliders,
+} from 'lucide-react';
 import { Navbar } from '../../components/common/Navbar';
 import { Footer } from '../../components/common/Footer';
 import { DashboardSidebar } from '../../components/dashboard/DashboardSidebar';
+import {
+  getBillingSubscription,
+  getBillingUsage,
+  getBillingInvoices,
+  getBillingPlans,
+  createCheckout,
+  UsageData,
+  InvoiceItem,
+} from '../../lib/api';
+import styles from './page.module.css';
 
-export default function BillingPage() {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [entitlement, setEntitlement] = useState<'FREE' | 'PRO_ACTIVE' | 'GRACE_PERIOD'>('FREE');
+function BillingContent() {
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'plans' ? 'plans' : 'quotas';
+  const [activeTab, setActiveTab] = useState<'quotas' | 'plans'>(initialTab);
 
-  const handleStartCheckout = async (plan: 'PRO_MONTHLY' | 'PRO_YEARLY') => {
-    setIsProcessing(true);
+  // Data states
+  const [subscription, setSubscription] = useState<any>(null);
+  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [plans, setPlans] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isProcessingCheckout, setIsProcessingCheckout] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
 
-    try {
-      // In production, calls POST /api/v1/billing/checkout
-      // and opens Razorpay Checkout modal
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/v1/billing/checkout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan }),
-      });
-
-      if (!res.ok) {
-        // If live gateway credentials not yet added, simulate test mode flow safely
-        alert(
-          'Notice: Razorpay live keys are currently in test-mode setup. Simulating Pro activation for testing.'
-        );
-        setEntitlement('PRO_ACTIVE');
-      } else {
-        const data = await res.json();
-        alert(`Checkout initialized with Razorpay Subscription: ${data.data.subscriptionId}`);
-      }
-    } catch {
-      alert('Simulating Pro tier activation in local test mode.');
-      setEntitlement('PRO_ACTIVE');
-    } finally {
-      setIsProcessing(false);
+  // Sync tab with URL search parameter if changed externally
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'plans' || tab === 'quotas') {
+      setActiveTab(tab);
     }
+  }, [searchParams]);
+
+  // Load backend billing data
+  const loadBillingData = async () => {
+    setIsLoading(true);
+    setFeedback(null);
+
+    const [subRes, usageRes, plansRes, invRes] = await Promise.all([
+      getBillingSubscription(),
+      getBillingUsage(),
+      getBillingPlans(),
+      getBillingInvoices(),
+    ]);
+
+    if (subRes.success && subRes.data) {
+      setSubscription(subRes.data);
+    }
+    if (usageRes.success && usageRes.data) {
+      setUsage(usageRes.data);
+    }
+    if (plansRes.success && plansRes.data?.items) {
+      setPlans(plansRes.data.items);
+    }
+    if (invRes.success && invRes.data?.items) {
+      setInvoices(invRes.data.items);
+    }
+
+    setIsLoading(false);
   };
+
+  useEffect(() => {
+    loadBillingData();
+  }, []);
+
+  const handleStartCheckout = async (planId: 'PRO_MONTHLY' | 'PRO_YEARLY') => {
+    setIsProcessingCheckout(true);
+    setFeedback(null);
+
+    const res = await createCheckout(planId);
+
+    if (res.success && res.data) {
+      setFeedback({
+        type: 'success',
+        message: `Razorpay checkout initialized. Subscription Order ID: ${res.data.subscriptionId}`,
+      });
+      // Refresh status after mock/gateway activation
+      loadBillingData();
+    } else {
+      setFeedback({
+        type: 'error',
+        message: res.error?.message || 'Failed to initialize checkout gateway.',
+      });
+    }
+
+    setIsProcessingCheckout(false);
+  };
+
+  const isPro = subscription?.entitlement_status === 'PRO_ACTIVE' || subscription?.entitlementStatus === 'PRO_ACTIVE';
+  const isGracePeriod = subscription?.entitlement_status === 'GRACE_PERIOD';
+
+  // Quota computations
+  const auditsUsed = usage?.currentAuditsCount ?? 0;
+  const maxAudits = usage?.maxDailyAudits ?? 3;
+  const auditPercent = Math.min(100, Math.round((auditsUsed / maxAudits) * 100));
+
+  const projectsCount = usage?.projectsCount ?? 1;
+  const maxProjects = usage?.maxProjects ?? 1;
+  const projectPercent = Math.min(100, Math.round((projectsCount / maxProjects) * 100));
 
   return (
     <>
       <Navbar />
-      <div style={{ display: 'flex', minHeight: 'calc(100vh - 64px)' }}>
+      <div className={styles.layout}>
         <DashboardSidebar />
-        <main style={{ flex: 1, padding: '32px', backgroundColor: 'var(--bg-primary)' }}>
-          <div style={{ marginBottom: '28px' }}>
-            <h1 style={{ fontSize: '24px', fontWeight: 700 }}>Plan, Billing & Quotas</h1>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-              Manage your subscription entitlements, view payment receipts, and upgrade plan limits.
+        <main className={styles.mainContent}>
+          {/* Header */}
+          <div className={styles.header}>
+            <h1 className={styles.title}>
+              {activeTab === 'quotas' ? 'Subscription & Resource Quotas' : 'Plan Selection & Billing'}
+            </h1>
+            <p className={styles.subtitle}>
+              {activeTab === 'quotas'
+                ? 'Monitor active crawl allowances, daily audit limits, and workspace usage.'
+                : 'Commercial plans, GST-compliant invoicing, and payment method settings.'}
             </p>
           </div>
 
-          {/* Grace Period Warning Banner */}
-          {entitlement === 'GRACE_PERIOD' && (
+          {/* Feedback Alert */}
+          {feedback && (
             <div
               style={{
-                backgroundColor: 'var(--high-light)',
-                border: '1px solid var(--high-border)',
+                padding: '12px 16px',
+                borderRadius: 'var(--radius-md)',
+                marginBottom: '20px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: feedback.type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+                border: `1px solid ${feedback.type === 'error' ? 'var(--critical)' : 'var(--success)'}`,
+                color: feedback.type === 'error' ? 'var(--critical)' : 'var(--success)',
+                fontSize: '13px',
+              }}
+            >
+              {feedback.type === 'error' ? <AlertTriangle size={16} /> : <CheckCircle size={16} />}
+              <span>{feedback.message}</span>
+            </div>
+          )}
+
+          {/* Grace Period Warning */}
+          {isGracePeriod && (
+            <div
+              style={{
+                backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                border: '1px solid var(--medium)',
                 borderRadius: 'var(--radius-md)',
                 padding: '16px',
                 marginBottom: '24px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '12px',
-                color: 'var(--high)',
+                color: 'var(--medium)',
+                fontSize: '13px',
               }}
             >
               <AlertTriangle size={20} />
               <div>
-                <strong>Action Required: Payment Renewal Failed. </strong>
-                Your 7-day grace period is active. Pro features remain available. Please update your payment card to prevent downgrade.
+                <strong>Renewal Alert:</strong> Your payment renewal is past due. A 7-day grace period is active before features are downgraded.
               </div>
             </div>
           )}
 
-          {/* Current Entitlement Overview */}
-          <div className="card" style={{ marginBottom: '28px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <div>
-                <span className="badge badge-info" style={{ marginBottom: '8px' }}>Active Subscription</span>
-                <h2 style={{ fontSize: '22px', fontWeight: 800 }}>
-                  {entitlement === 'PRO_ACTIVE' ? 'SiteScope Pro (Monthly)' : 'SiteScope Free Tier'}
-                </h2>
-                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                  {entitlement === 'PRO_ACTIVE'
-                    ? 'Renewal Date: Nov 22, 2026 · Auto-renewing at ₹799 + GST'
-                    : 'Basic website audit limits. No recurring charges.'}
-                </p>
-              </div>
+          {/* Unified Sub-Navigation Tabs */}
+          <div className={styles.tabNav}>
+            <button
+              className={`${styles.tabBtn} ${activeTab === 'quotas' ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab('quotas')}
+            >
+              <Layers size={16} />
+              <span>Subscription & Quotas</span>
+            </button>
+            <button
+              className={`${styles.tabBtn} ${activeTab === 'plans' ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab('plans')}
+            >
+              <CreditCard size={16} />
+              <span>Plan & Billing</span>
+            </button>
+          </div>
 
-              <div>
-                {entitlement === 'FREE' ? (
+          {/* TAB 1: SUBSCRIPTION & QUOTAS */}
+          {activeTab === 'quotas' && (
+            <div>
+              {/* Current Active Plan Overview */}
+              <div className={styles.entitlementCard}>
+                <div>
+                  <span className={`badge ${isPro ? 'badge-success' : 'badge-low'}`}>
+                    {isPro ? 'Pro Subscription' : 'Free Tier Workspace'}
+                  </span>
+                  <div className={styles.entitlementTitle}>
+                    {isPro ? 'SiteScope Professional' : 'SiteScope Community Tier'}
+                  </div>
+                  <div className={styles.entitlementMeta}>
+                    {isPro
+                      ? 'Unlimited access to advanced SEO audits, Core Web Vitals, and daily crawl batches.'
+                      : 'Essential website health checks for personal projects and small sites.'}
+                  </div>
+                </div>
+
+                {!isPro && (
                   <button
-                    onClick={() => handleStartCheckout('PRO_MONTHLY')}
                     className="btn btn-primary"
-                    disabled={isProcessing}
+                    onClick={() => setActiveTab('plans')}
                   >
-                    <CreditCard size={16} />
-                    <span>{isProcessing ? 'Processing...' : 'Upgrade to Pro (₹799/mo)'}</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setEntitlement('FREE')}
-                    className="btn btn-secondary"
-                  >
-                    <span>Cancel Subscription</span>
+                    <span>Upgrade Resource Limits</span>
                   </button>
                 )}
               </div>
-            </div>
 
-            {/* Quota Progress Details */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
-              <div>
-                <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Daily Audits Used</div>
-                <div style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0' }}>
-                  {entitlement === 'PRO_ACTIVE' ? '3 / 30' : '1 / 3'}
+              {/* Resource Consumption Progress */}
+              <div className={styles.quotaGrid}>
+                {/* Daily Audits */}
+                <div className={styles.quotaCard}>
+                  <span className={styles.quotaLabel}>Daily Audits Allowance</span>
+                  <div className={styles.quotaValue}>
+                    {auditsUsed} / {maxAudits}
+                  </div>
+                  <div className={styles.progressBar}>
+                    <div
+                      className={styles.progressFill}
+                      style={{
+                        width: `${auditPercent}%`,
+                        backgroundColor: auditPercent >= 100 ? 'var(--critical)' : 'var(--primary)',
+                      }}
+                    />
+                  </div>
+                  <div className={styles.quotaHint}>
+                    {maxAudits - auditsUsed} audits remaining today. Resets at midnight UTC.
+                  </div>
                 </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Resets midnight UTC</div>
+
+                {/* Monitored Websites */}
+                <div className={styles.quotaCard}>
+                  <span className={styles.quotaLabel}>Monitored Websites</span>
+                  <div className={styles.quotaValue}>
+                    {projectsCount} / {maxProjects}
+                  </div>
+                  <div className={styles.progressBar}>
+                    <div
+                      className={styles.progressFill}
+                      style={{
+                        width: `${projectPercent}%`,
+                        backgroundColor: projectPercent >= 100 ? 'var(--medium)' : 'var(--primary)',
+                      }}
+                    />
+                  </div>
+                  <div className={styles.quotaHint}>
+                    Registered domains eligible for automated crawl jobs.
+                  </div>
+                </div>
+
+                {/* Max Pages per Crawl */}
+                <div className={styles.quotaCard}>
+                  <span className={styles.quotaLabel}>Crawl Depth & Page Ceiling</span>
+                  <div className={styles.quotaValue}>
+                    {usage?.maxPagesPerAudit ?? 50} Pages
+                  </div>
+                  <div className={styles.progressBar}>
+                    <div className={styles.progressFill} style={{ width: '100%' }} />
+                  </div>
+                  <div className={styles.quotaHint}>
+                    Maximum HTML pages evaluated per individual crawl job.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: PLAN & BILLING */}
+          {activeTab === 'plans' && (
+            <div>
+              {/* Plan Pricing Grid */}
+              <div className={styles.pricingGrid}>
+                {/* Free Plan */}
+                <div className={styles.pricingCard}>
+                  <div className={styles.planName}>Free Community</div>
+                  <div className={styles.planPrice}>
+                    ₹0 <span className={styles.planInterval}>/ month</span>
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Essential technical SEO diagnostic tools for indie developers.
+                  </p>
+
+                  <ul className={styles.planFeatureList}>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>3 Audits per Day</span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>50 Crawled Pages per Audit</span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>1 Registered Website</span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>Core SEO & Security Rules</span>
+                    </li>
+                  </ul>
+
+                  <button
+                    className="btn btn-secondary"
+                    disabled={!isPro}
+                    style={{ marginTop: 'auto' }}
+                  >
+                    {!isPro ? 'Current Plan' : 'Downgrade to Free'}
+                  </button>
+                </div>
+
+                {/* Pro Monthly */}
+                <div className={`${styles.pricingCard} ${styles.pricingCardHighlighted}`}>
+                  <div className={styles.planTag}>Most Popular</div>
+                  <div className={styles.planName}>SiteScope Pro (Monthly)</div>
+                  <div className={styles.planPrice}>
+                    ₹799 <span className={styles.planInterval}>/ month + 18% GST</span>
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Full platform power for growth companies and digital agencies.
+                  </p>
+
+                  <ul className={styles.planFeatureList}>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span><strong>30 Audits per Day</strong></span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span><strong>1,000 Crawled Pages per Audit</strong></span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span><strong>10 Registered Websites</strong></span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>Google PageSpeed Insights Vitals</span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>Playwright Headless Browser Rendering</span>
+                    </li>
+                  </ul>
+
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleStartCheckout('PRO_MONTHLY')}
+                    disabled={isProcessingCheckout || isPro}
+                    style={{ marginTop: 'auto' }}
+                  >
+                    {isPro ? 'Active Plan' : isProcessingCheckout ? 'Initializing...' : 'Upgrade with Razorpay'}
+                  </button>
+                </div>
+
+                {/* Pro Yearly */}
+                <div className={styles.pricingCard}>
+                  <div className={styles.planName}>SiteScope Pro (Annual)</div>
+                  <div className={styles.planPrice}>
+                    ₹7,990 <span className={styles.planInterval}>/ year (2 Months Free)</span>
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Annual commitment with maximum savings and priority crawler compute.
+                  </p>
+
+                  <ul className={styles.planFeatureList}>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>All Pro Monthly Capabilities</span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>Priority Queue Allocation</span>
+                    </li>
+                    <li className={styles.planFeatureItem}>
+                      <CheckCircle size={15} style={{ color: 'var(--success)' }} />
+                      <span>1-Year Data Retention</span>
+                    </li>
+                  </ul>
+
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => handleStartCheckout('PRO_YEARLY')}
+                    disabled={isProcessingCheckout}
+                    style={{ marginTop: 'auto' }}
+                  >
+                    {isProcessingCheckout ? 'Initializing...' : 'Switch to Annual Billing'}
+                  </button>
+                </div>
               </div>
 
-              <div>
-                <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Max Pages per Crawl</div>
-                <div style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0' }}>
-                  {entitlement === 'PRO_ACTIVE' ? '1,000 Pages' : '50 Pages'}
-                </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>CheerioCrawler depth</div>
-              </div>
+              {/* Invoices & Billing History */}
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>GST Tax Invoices & Billing History</h3>
 
-              <div>
-                <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Monitored Websites</div>
-                <div style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0' }}>
-                  {entitlement === 'PRO_ACTIVE' ? '3 / 10' : '1 / 1'}
-                </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Concurrent audit slots</div>
+                {invoices.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)' }}>
+                    <FileText size={32} style={{ marginBottom: '8px' }} />
+                    <p style={{ fontSize: '13px' }}>No payment receipts or invoices generated yet.</p>
+                  </div>
+                ) : (
+                  <div className={styles.tableContainer}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th className={styles.th}>Invoice #</th>
+                          <th className={styles.th}>Date</th>
+                          <th className={styles.th}>Amount</th>
+                          <th className={styles.th}>GST (18%)</th>
+                          <th className={styles.th}>Status</th>
+                          <th className={styles.th} style={{ textAlign: 'right' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invoices.map((inv) => (
+                          <tr key={inv.id}>
+                            <td className={styles.td}>
+                              <strong>{inv.invoice_number}</strong>
+                            </td>
+                            <td className={styles.td}>
+                              {new Date(inv.created_at).toLocaleDateString()}
+                            </td>
+                            <td className={styles.td}>
+                              ₹{(inv.total_paise / 100).toFixed(2)}
+                            </td>
+                            <td className={styles.td}>
+                              ₹{(inv.tax_paise / 100).toFixed(2)}
+                            </td>
+                            <td className={styles.td}>
+                              <span className="badge badge-success">Paid</span>
+                            </td>
+                            <td className={styles.td} style={{ textAlign: 'right' }}>
+                              {inv.pdf_url ? (
+                                <a
+                                  href={inv.pdf_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                >
+                                  <Download size={12} />
+                                  <span>PDF</span>
+                                </a>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Generated</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-
-          {/* Payment History & Tax Invoices Table */}
-          <div className="card">
-            <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>
-              Billing History & Tax Invoices (GST Compliant)
-            </h3>
-
-            <div className="table-wrapper">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Invoice ID</th>
-                    <th>Billing Period</th>
-                    <th>Amount Paid</th>
-                    <th>Payment Method</th>
-                    <th>Status</th>
-                    <th>Download</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={{ fontWeight: 600 }}>INV-2026-00104</td>
-                    <td>Oct 22, 2026 – Nov 22, 2026</td>
-                    <td>₹943 (₹799 + 18% GST)</td>
-                    <td>Razorpay Mandate (Card)</td>
-                    <td>
-                      <span className="badge badge-success">Paid</span>
-                    </td>
-                    <td>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '3px 8px', fontSize: '12px' }}>
-                        <Download size={12} /> PDF
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </main>
       </div>
       <Footer />
     </>
+  );
+}
+
+export default function BillingPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center' }}>Loading billing dashboard...</div>}>
+      <BillingContent />
+    </Suspense>
   );
 }

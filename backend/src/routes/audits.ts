@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { CreateAuditSchema, PaginationQuerySchema } from '@sitescope/shared';
 import { requireAuth } from '../middleware/auth.js';
-import { getSupabaseAdmin } from '../services/supabase.js';
+import { getSupabaseAdmin, isSupabaseConfigured } from '../services/supabase.js';
 import { validateTargetUrl } from '../services/ssrf.js';
 import { enqueueAuditJob } from '../services/queue.js';
 
@@ -100,6 +100,80 @@ export async function auditRoutes(app: FastifyInstance) {
     });
   });
 
+  // List Audits for User (Optionally filtered by projectId or status)
+  app.get('/audits', async (req: FastifyRequest, reply: FastifyReply) => {
+    const userId = (req as any).user.id;
+    const query = PaginationQuerySchema.parse(req.query);
+    const { projectId, status } = req.query as { projectId?: string; status?: string };
+
+    if (!isSupabaseConfigured()) {
+      return {
+        success: true,
+        data: {
+          items: [],
+          pagination: {
+            page: query.page,
+            limit: query.limit,
+            totalItems: 0,
+            totalPages: 0,
+          },
+        },
+      };
+    }
+
+    try {
+      const supabase = getSupabaseAdmin();
+      const from = (query.page - 1) * query.limit;
+      const to = from + query.limit - 1;
+
+      let dbQuery = supabase
+        .from('audit_jobs')
+        .select('*, projects(name, domain)', { count: 'exact' })
+        .eq('user_id', userId);
+
+      if (projectId) {
+        dbQuery = dbQuery.eq('project_id', projectId);
+      }
+
+      if (status) {
+        dbQuery = dbQuery.eq('status', status.toUpperCase());
+      }
+
+      const { data: audits, count, error } = await dbQuery
+        .range(from, to)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      return {
+        success: true,
+        data: {
+          items: audits || [],
+          pagination: {
+            page: query.page,
+            limit: query.limit,
+            totalItems: count || 0,
+            totalPages: Math.ceil((count || 0) / query.limit),
+          },
+        },
+      };
+    } catch (err: any) {
+      req.log.warn({ err }, 'Error querying audits list from Supabase');
+      return {
+        success: true,
+        data: {
+          items: [],
+          pagination: {
+            page: query.page,
+            limit: query.limit,
+            totalItems: 0,
+            totalPages: 0,
+          },
+        },
+      };
+    }
+  });
+
   // Get Single Audit Status
   app.get('/audits/:auditId', async (req: FastifyRequest<{ Params: { auditId: string } }>, reply: FastifyReply) => {
     const userId = (req as any).user.id;
@@ -174,11 +248,12 @@ export async function auditRoutes(app: FastifyInstance) {
     };
   });
 
-  // Get Findings / Issues for an Audit
+  // Get Findings / Issues for an Audit (Optionally filtered by category)
   app.get('/audits/:auditId/issues', async (req: FastifyRequest<{ Params: { auditId: string } }>, reply: FastifyReply) => {
     const userId = (req as any).user.id;
     const { auditId } = req.params;
     const query = PaginationQuerySchema.parse(req.query);
+    const { category, severity } = req.query as { category?: string; severity?: string };
     const supabase = getSupabaseAdmin();
 
     const { data: audit } = await supabase
@@ -198,10 +273,20 @@ export async function auditRoutes(app: FastifyInstance) {
     const from = (query.page - 1) * query.limit;
     const to = from + query.limit - 1;
 
-    const { data: issues, count, error } = await supabase
+    let dbQuery = supabase
       .from('issues')
       .select('*', { count: 'exact' })
-      .eq('project_id', audit.project_id)
+      .eq('project_id', audit.project_id);
+
+    if (category) {
+      dbQuery = dbQuery.eq('category', category.toUpperCase());
+    }
+
+    if (severity) {
+      dbQuery = dbQuery.eq('severity', severity.toUpperCase());
+    }
+
+    const { data: issues, count, error } = await dbQuery
       .range(from, to)
       .order('score_impact', { ascending: false });
 
@@ -219,5 +304,60 @@ export async function auditRoutes(app: FastifyInstance) {
         },
       },
     };
+  });
+
+  // Get Performance Metrics for an Audit
+  app.get('/audits/:auditId/performance', async (req: FastifyRequest<{ Params: { auditId: string } }>, reply: FastifyReply) => {
+    const userId = (req as any).user.id;
+    const { auditId } = req.params;
+
+    if (!isSupabaseConfigured()) {
+      return {
+        success: true,
+        data: {
+          items: [],
+        },
+      };
+    }
+
+    try {
+      const supabase = getSupabaseAdmin();
+
+      const { data: audit } = await supabase
+        .from('audit_jobs')
+        .select('project_id')
+        .eq('id', auditId)
+        .eq('user_id', userId)
+        .single();
+
+      if (!audit) {
+        return reply.status(404).send({
+          success: false,
+          error: { code: 'AUDIT_NOT_FOUND', message: 'Audit not found.' },
+        });
+      }
+
+      const { data: metrics, error } = await supabase
+        .from('performance_metrics')
+        .select('*')
+        .eq('audit_job_id', auditId);
+
+      if (error) throw error;
+
+      return {
+        success: true,
+        data: {
+          items: metrics || [],
+        },
+      };
+    } catch (err: any) {
+      req.log.warn({ err }, 'Error fetching performance metrics');
+      return {
+        success: true,
+        data: {
+          items: [],
+        },
+      };
+    }
   });
 }

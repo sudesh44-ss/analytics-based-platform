@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import { setupRawBodyParser } from './plugins/raw-body.js';
 import { setupErrorHandler } from './plugins/error-handler.js';
 import { healthRoutes } from './routes/health.js';
@@ -27,6 +28,20 @@ export function buildApp(): FastifyInstance {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Requested-With'],
+  });
+
+  // Global Rate Limiting Baseline (100 requests per minute per IP)
+  app.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
+    allowList: ['127.0.0.1'],
+    errorResponseBuilder: () => ({
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many requests. Please slow down and try again later.',
+      },
+    }),
   });
 
   // Raw body parser for webhook signatures

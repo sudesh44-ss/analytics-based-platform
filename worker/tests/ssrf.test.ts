@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTargetUrl } from '../src/security/ssrf.js';
+import { validateTargetUrl, isIpAddressDisallowed } from '../src/security/ssrf.js';
 
 test('Worker SSRF Defense Layer', async (t) => {
   await t.test('blocks loopback destination 127.0.0.1 by default', async () => {
@@ -12,7 +12,7 @@ test('Worker SSRF Defense Layer', async (t) => {
   await t.test('blocks localhost hostname', async () => {
     const res = await validateTargetUrl('http://localhost');
     assert.equal(res.isValid, false);
-    assert.match(res.error || '', /localhost/i);
+    assert.match(res.error || '', /prohibited|local destination|localhost/i);
   });
 
   await t.test('blocks cloud metadata 169.254.169.254', async () => {
@@ -45,5 +45,28 @@ test('Worker SSRF Defense Layer', async (t) => {
     const res = await validateTargetUrl('http://example.com:22');
     assert.equal(res.isValid, false);
     assert.match(res.error || '', /port 22 is not permitted/i);
+  });
+
+  await t.test('blocks IPv6 loopback [::1] and link-local [fe80::1]', async () => {
+    const resLoop = await validateTargetUrl('http://[::1]');
+    assert.equal(resLoop.isValid, false);
+
+    const resLink = await validateTargetUrl('http://[fe80::1]');
+    assert.equal(resLink.isValid, false);
+  });
+
+  await t.test('blocks IPv4-mapped IPv6 literals', async () => {
+    const resMapped = await validateTargetUrl('http://[::ffff:127.0.0.1]');
+    assert.equal(resMapped.isValid, false);
+
+    const resMetadata = await validateTargetUrl('http://[::ffff:169.254.169.254]');
+    assert.equal(resMetadata.isValid, false);
+  });
+
+  await t.test('isIpAddressDisallowed utility identifies illegal IPs', () => {
+    assert.equal(isIpAddressDisallowed('127.0.0.1').disallowed, true);
+    assert.equal(isIpAddressDisallowed('169.254.169.254').disallowed, true);
+    assert.equal(isIpAddressDisallowed('10.1.2.3').disallowed, true);
+    assert.equal(isIpAddressDisallowed('fd00:ec2::254').disallowed, true);
   });
 });

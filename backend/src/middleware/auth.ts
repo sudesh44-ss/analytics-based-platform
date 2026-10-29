@@ -1,5 +1,5 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
-import { getSupabaseAdmin } from '../services/supabase.js';
+import { getSupabaseAdmin, isSupabaseConfigured } from '../services/supabase.js';
 
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   const authHeader = request.headers.authorization;
@@ -16,10 +16,14 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 
   const token = authHeader.substring(7).trim();
 
-  // Development bypass when running locally without a connected Supabase instance
-  const isDev = process.env.NODE_ENV !== 'production';
-  const isPlaceholder = !process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes('placeholder');
-  if (isDev && (token === 'dev-token' || isPlaceholder)) {
+  // Development bypass strictly controlled: prohibited in production/staging environments
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+  const isTest = process.env.NODE_ENV === 'test';
+  const allowDevBypass =
+    process.env.ALLOW_DEV_AUTH_BYPASS === 'true' ||
+    (!isProduction && !isSupabaseConfigured());
+
+  if (!isProduction && (isTest || allowDevBypass) && token === 'dev-token') {
     (request as any).user = {
       id: '00000000-0000-0000-0000-000000000001',
       email: 'dev@sitescope.io',
@@ -46,7 +50,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
       id: user.id,
       email: user.email,
     };
-  } catch (err: any) {
+  } catch {
     return reply.status(401).send({
       success: false,
       error: {

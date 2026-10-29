@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "tsx --test tests/health.test.ts tests/ssrf.test.ts",
+    "test": "tsx --test tests/health.test.ts tests/ssrf.test.ts tests/audits.test.ts tests/auth.test.ts tests/plans.test.ts tests/endpoints.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

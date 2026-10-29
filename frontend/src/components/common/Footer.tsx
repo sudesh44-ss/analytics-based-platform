@@ -39,17 +39,6 @@ export function Footer() {
               <Link href="/contact" className={styles.link}>Contact Support</Link>
             </div>
           </div>
-
-          <div>
-            <div className={styles.colTitle}>Technology</div>
-            <div className={styles.linkList}>
-              <span className={styles.link}>Next.js 16 (App Router)</span>
-              <span className={styles.link}>Fastify REST Engine</span>
-              <span className={styles.link}>Crawlee & Playwright</span>
-              <span className={styles.link}>Supabase PostgreSQL</span>
-              <span className={styles.link}>Razorpay Subscriptions</span>
-            </div>
-          </div>
         </div>
 
         <div className={styles.bottom}>

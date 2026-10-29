@@ -24,7 +24,7 @@ function SidebarContent() {
     { label: 'Technical SEO', href: '/audits', icon: FileSearch },
     { label: 'Performance & Vitals', href: '/audits/performance', icon: Gauge },
     { label: 'Security Audits', href: '/audits/security', icon: ShieldCheck },
-    { label: 'Subscription & Quota', href: '/billing', icon: CreditCard },
+    { label: 'Subscription & Quota', href: '/billing?tab=quotas', icon: CreditCard },
   ];
 
   return (
@@ -32,10 +32,10 @@ function SidebarContent() {
       <div className={styles.sectionTitle}>Main Navigation</div>
       {links.map((link) => {
         const Icon = link.icon;
-        const isActive = pathname === link.href || pathname?.startsWith(`${link.href}/`);
+        const isActive = pathname === link.href.split('?')[0];
         return (
           <Link
-            key={link.href}
+            key={link.label}
             href={link.href}
             className={`${styles.navItem} ${isActive ? styles.active : ''}`}
           >
@@ -46,7 +46,7 @@ function SidebarContent() {
       })}
 
       <div className={styles.sectionTitle}>Settings & Help</div>
-      <Link href="/billing" className={styles.navItem}>
+      <Link href="/billing?tab=plans" className={styles.navItem}>
         <Settings size={18} />
         <span>Plan & Billing</span>
       </Link>

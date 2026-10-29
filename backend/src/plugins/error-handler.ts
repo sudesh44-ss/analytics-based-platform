@@ -6,13 +6,14 @@ export function setupErrorHandler(app: any) {
     request.log.error(error);
 
     // Handle Zod Validation Errors
-    if (error instanceof ZodError) {
+    if (error instanceof ZodError || error.name === 'ZodError') {
+      const flattened = 'flatten' in error && typeof error.flatten === 'function' ? error.flatten().fieldErrors : undefined;
       return reply.status(400).send({
         success: false,
         error: {
           code: 'VALIDATION_ERROR',
           message: 'Request payload failed schema validation.',
-          details: error.flatten().fieldErrors,
+          details: flattened,
         },
       });
     }
